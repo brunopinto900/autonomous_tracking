@@ -13,6 +13,7 @@ import matplotlib
 import os
 plt.ion()
 matplotlib.use("TkAgg")
+from math import fabs, pi
 
 # TODO
 # clean code, organize into classes
@@ -27,6 +28,24 @@ DIST_2_TARGET = FOV_D/2
 TRG_HORIZ = 10
 
 fig = plt.figure()
+
+def truncated_remainder(dividend, divisor):
+    divided_number = dividend / divisor
+    divided_number = \
+        -int(-divided_number) if divided_number < 0 else int(divided_number)
+
+    remainder = dividend - divisor * divided_number
+
+    return remainder
+
+def transform_to_pipi(input_angle):
+    p1 = truncated_remainder(input_angle + np.sign(input_angle) * pi, 2 * pi)
+    p2 = (np.sign(np.sign(input_angle)
+                  + 2 * (np.sign(fabs((truncated_remainder(input_angle + pi, 2 * pi))
+                                      / (2 * pi))) - 1))) * pi
+    output_angle = p1 - p2
+
+    return output_angle
 
 pause = False
 def onclick(event):
@@ -60,6 +79,11 @@ class environment:
         self.obstacles = np.array( [ [-2,5],[-1.5,5], [-1,5],[-0.5,5], [0,5],[0.5,5],  [1,5], [1.5,5],[2,5]] )
         self.bounds = 15
 
+def plot_tangent(x,y,yaw):
+    yaw = math.degrees(yaw)
+    cone = Wedge((x, y), 4, yaw - FOV_theta/16, yaw + FOV_theta/16, ec="none",edgecolor='black',facecolor='black')
+    plt.gcf().gca().add_artist(cone)
+    
 def plot_refYaw(x,y,yaw):
     yaw = math.degrees(yaw)
     cone = Wedge((x, y), 4, yaw - FOV_theta/8, yaw + FOV_theta/8, ec="none",edgecolor='orange',facecolor='orange')
@@ -231,22 +255,41 @@ def getRefTrajRapid(traj, t):
     
     return position
 
-def getYaw(drone_x, drone_y, target_x, target_y):
-     deltaX = target_x - drone_x
-     deltaY = target_y - drone_y
+def getYaw(x1, y1, x2, y2):
+     deltaX = x2 - x1
+     deltaY = y2 - y1
      theta = np.arctan2( deltaY, deltaX)
      return theta
  
-def getGoalPosition(drone_x, drone_y, target_x, target_y, const_dist):
+def getGoalPosition(drone_x, drone_y, target_x, target_y, const_dist, 
+                    target_lastX, target_lastY, previousTan):
+    
     deltaX = target_x - drone_x
     deltaY = target_y - drone_y
-    deltaD = np.hypot(deltaX, deltaY ) - const_dist
-    theta = np.arctan2( deltaY, deltaX)
-    droneCONST_x = drone_x + np.cos(theta)*deltaD
-    droneCONST_y = drone_y + np.sin(theta)*deltaD
+    #deltaD = np.hypot(deltaX, deltaY ) - const_dist
     
-    return droneCONST_x, droneCONST_y
+    # Calculate tangent
+    deltaX = target_x - target_lastX
+    deltaY = target_y - target_lastY
+    tan = np.arctan2( deltaY, deltaX)
+    alpha = 0.8
+    cosa = alpha * np.cos(previousTan) + (1 - alpha) * np.cos(tan)
+    sina = alpha * np.sin(previousTan) + (1 - alpha) * np.sin(tan)
+    tanFiltered = np.arctan2(sina, cosa) # Calculate tangent
+    
+    droneCONST_x = target_x - np.cos(tanFiltered)*const_dist #deltaD
+    droneCONST_y = target_y - np.sin(tanFiltered)*const_dist #deltaD
+    
+    return droneCONST_x, droneCONST_y, tanFiltered
 
+def computeDesiredAcceleration(drone_x, drone_y, target_x, target_y, const_dist):
+    deltaX = target_x - drone_x - const_dist
+    deltaY = target_y - drone_y - const_dist
+    #deltaD = np.hypot(deltaX, deltaY ) - const_dist
+    kp = 0.1
+    return kp*np.array([deltaX, deltaY, 0])
+
+WEIGHTED_AVG = True
 def main():
     # Load environment
     env = environment()
@@ -272,7 +315,7 @@ def main():
     vel0 = np.array([x0_val[3], x0_val[4], x0_val[5] ])
     velf = vel0
     acc0 = np.array([0, 0, 0 ])
-    posfX, posfY = getGoalPosition(x0_val[0], x0_val[1], target_x[-1],target_y[-1], DIST_2_TARGET)
+    posfX, posfY, tangent = getGoalPosition(x0_val[0], x0_val[1], target_x[-1],target_y[-1], DIST_2_TARGET, x0_val[0], x0_val[1],1.42)
     posf = np.array([posfX,posfY, height ]) # TARGET CURRENT LOCATION SHIFTED WITH RELATIVE DIST
     rapid_traj = generate_single_motion_primitive(pos0,vel0,acc0,posf,velf, t0_val)
     mpc = MPC(  rapid_traj, getReferenceTrajectoryTarget, x0_val, t0_val )
@@ -314,19 +357,36 @@ def main():
         if not pause:
             pos0 = np.array([x[0], x[1], x[2] ])
             vel0 = np.array([x[3], x[4], x[5] ])
-            velf = vel0
+            velf = vel0 + computeDesiredAcceleration(x[0], x[1], 
+                                                     target_x[-1],target_y[-1], DIST_2_TARGET)*t
             acc0 = np.array([0, 0, 0 ])
             yaw = getYaw(x[0], x[1], target_x[-1],target_y[-1])
             tau = t+TRG_HORIZ*sampling_time
             # Select best goal to track target
             if(tau > Tf):
-                target_xGoal = splineX(Tf)
-                target_yGoal = splineY(Tf)
+                target_xPredicted = splineX(Tf)
+                target_yPredicted = splineY(Tf)
             else:
-                target_xGoal = splineX(tau) # target_x[-1]
-                target_yGoal = splineY(tau) # target_y[-1]
+                target_xPredicted = splineX(tau) # target_x[-1]
+                target_yPredicted = splineY(tau) # target_y[-1]
             
-            posfX, posfY = getGoalPosition(x[0], x[1],target_xGoal,target_yGoal, DIST_2_TARGET)
+            if(len(target_x) <= 1): # first time, initialize with drone's initial state
+                posfX, posfY, tangent = getGoalPosition(x[0], x[1],
+                                                        target_xPredicted,target_yPredicted,
+                                                        DIST_2_TARGET, x[0], x[1], 1.42)
+            else:
+                posfX, posfY, tangent = getGoalPosition(x[0], x[1],
+                                                        target_xPredicted,target_yPredicted,
+                                                        DIST_2_TARGET,
+                                               target_x[--1], target_y[-1], tangent)
+            
+            if(WEIGHTED_AVG):
+                w = 0.5
+                posfX = (1-w)*splineX(t) + w*target_xPredicted # weighted average
+                posfY = (1-w)*splineY(t) + w*target_yPredicted # weighted average
+                #posfX = (1-w)*x[0] + w*target_xGoal # weighted average (drone)
+                #posfY = (1-w)*x[1] + w*target_yGoal # weighted average (drone)
+            
             posf = np.array([posfX,posfY, height ]) # TARGET CURRENT LOCATION SHIFTED WITH RELATIVE DIST
             
             rapid_traj = generate_single_motion_primitive(pos0,vel0,acc0,posf,velf, t)
@@ -377,9 +437,14 @@ def main():
             plot_refYaw(x[0],x[1],yaw)
             plotobs(x[0],x[1],all_obstacles)
            
+            # PLOT TANGENT
+            #print("YAW: " + str(yaw))
+            #print("TANGENT: " + str(tangent))
+            #plot_tangent(target_x[-1],target_y[-1],tangent)
+            
             #plt.waitforbuttonpress()
             plt.savefig(os.getcwd()+"/images/"+"image"+str(idx)+'.png')
-            plt.pause(0.01)
+            plt.pause(0.001)
         
         ######### PLOTTING #########
     plt.show()
