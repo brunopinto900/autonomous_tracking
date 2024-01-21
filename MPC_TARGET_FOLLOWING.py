@@ -268,16 +268,33 @@ def getYaw(x1, y1, x2, y2):
      deltaY = y2 - y1
      theta = np.arctan2( deltaY, deltaX)
      return theta
- 
-def getGoalPosition(drone_x, drone_y, target_x, target_y, const_dist, 
+
+def getGoalPosition(obstacle, drone_x, drone_y, target_x, target_y, const_dist, 
                     target_lastX, target_lastY, previousTan):
     
-    USE_TAN = True
+    USE_TAN = False
     deltaX = target_x - drone_x
     deltaY = target_y - drone_y
     theta = np.arctan2( deltaY, deltaX)
-    deltaD = np.hypot(deltaX, deltaY ) - const_dist
-    
+    deltaD = np.hypot(deltaX, deltaY )
+    droneCONST_x = drone_x + np.cos(theta)*(deltaD - const_dist)
+    droneCONST_y = drone_y + np.sin(theta)*(deltaD - const_dist)
+        
+    if(len(obstacle) > 0):
+        # Detect collision LOS with obstacles
+        discret_dist = np.linspace(0, deltaD, int(deltaD*10))
+        ob_x = obstacle[0][0]
+        ob_y = obstacle[0][1]  
+        for d in discret_dist:
+            diffX = ob_x - droneCONST_x + np.cos(theta)*d
+            diffY = ob_y - droneCONST_y + np.sin(theta)*d
+            plt.plot(ob_x, ob_y, '-ko',markersize=15)
+            # check collision
+            if( np.hypot(diffX, diffY) < 2.0):
+                print("LOS BLOCKED")
+                USE_TAN = True
+                break
+        
     # Calculate tangent
     deltaXTan = target_x - target_lastX
     deltaYTan = target_y - target_lastY
@@ -294,10 +311,6 @@ def getGoalPosition(drone_x, drone_y, target_x, target_y, const_dist,
             droneCONST_x = target_x + np.cos(tanFiltered)*const_dist
             
         droneCONST_y = target_y - np.sin(tanFiltered)*const_dist
-    else:
-        
-        droneCONST_x = target_x - np.cos(theta)*deltaD
-        droneCONST_y = target_y - np.sin(theta)*deltaD
         
     return droneCONST_x, droneCONST_y, tanFiltered
 
@@ -334,7 +347,7 @@ def main():
     vel0 = np.array([x0_val[3], x0_val[4], x0_val[5] ])
     velf = vel0
     acc0 = np.array([0, 0, 0 ])
-    posfX, posfY, tangent = getGoalPosition(x0_val[0], x0_val[1], target_x[-1],target_y[-1], DIST_2_TARGET, x0_val[0], x0_val[1],1.42)
+    posfX, posfY, tangent = getGoalPosition([], x0_val[0], x0_val[1], target_x[-1],target_y[-1], DIST_2_TARGET, x0_val[0], x0_val[1],1.42)
     posf = np.array([posfX,posfY, height ]) # TARGET CURRENT LOCATION SHIFTED WITH RELATIVE DIST
     rapid_traj = generate_single_motion_primitive(pos0,vel0,acc0,posf,velf, t0_val)
     mpc = MPC(  rapid_traj, getReferenceTrajectoryTarget, x0_val, t0_val )
@@ -374,6 +387,9 @@ def main():
         plt.ylim( (-6,8))
         
         if not pause:
+            observed_obstacles = updateObstacleMap(x[0],x[1], all_obstacles)
+            nearest_obstacle, ind = getNearestObstacle(x[0],x[1],observed_obstacles)
+            
             pos0 = np.array([x[0], x[1], x[2] ])
             vel0 = np.array([x[3], x[4], x[5] ])
             velf = vel0 + computeDesiredAcceleration(x[0], x[1], 
@@ -390,11 +406,17 @@ def main():
                 target_yPredicted = splineY(tau) # target_y[-1]
             
             if(len(target_x) <= 1): # first time, initialize with drone's initial state
-                posfX, posfY, tangent = getGoalPosition(x[0], x[1],
+                nearest_obstacle_target, ind = getNearestObstacle(target_xPredicted,
+                                                              target_yPredicted,
+                                                              observed_obstacles)
+                posfX, posfY, tangent = getGoalPosition(nearest_obstacle_target, x[0], x[1],
                                                         target_xPredicted,target_yPredicted,
                                                         DIST_2_TARGET, x[0], x[1], 1.42)
             else:
-                posfX, posfY, tangent = getGoalPosition(x[0], x[1],
+                nearest_obstacle_target, ind = getNearestObstacle(target_xPredicted,
+                                                              target_yPredicted,
+                                                              observed_obstacles)
+                posfX, posfY, tangent = getGoalPosition(nearest_obstacle_target, x[0], x[1],
                                                         target_xPredicted,target_yPredicted,
                                                         DIST_2_TARGET,
                                                target_x[-1], target_y[-1], tangent)
@@ -422,8 +444,8 @@ def main():
             target_x.append( splineX(t) )
             target_y.append( splineY(t) )
             
-            observed_obstacles = updateObstacleMap(x[0],x[1], all_obstacles)
-            nearest_obstacle, ind = getNearestObstacle(x[0],x[1],observed_obstacles)
+            
+            
             mpc.set_obstacles(nearest_obstacle)
             
             mpc.setTraj( rapid_traj )
