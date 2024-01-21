@@ -29,6 +29,14 @@ TRG_HORIZ = 10
 
 fig = plt.figure()
 
+def sign(x):
+    if x < 0:
+        return -1
+    if x == 0:
+        return 0
+    else:
+        return 1
+    
 def truncated_remainder(dividend, divisor):
     divided_number = dividend / divisor
     divided_number = \
@@ -264,22 +272,33 @@ def getYaw(x1, y1, x2, y2):
 def getGoalPosition(drone_x, drone_y, target_x, target_y, const_dist, 
                     target_lastX, target_lastY, previousTan):
     
+    USE_TAN = True
     deltaX = target_x - drone_x
     deltaY = target_y - drone_y
-    #deltaD = np.hypot(deltaX, deltaY ) - const_dist
+    theta = np.arctan2( deltaY, deltaX)
+    deltaD = np.hypot(deltaX, deltaY ) - const_dist
     
     # Calculate tangent
-    deltaX = target_x - target_lastX
-    deltaY = target_y - target_lastY
-    tan = np.arctan2( deltaY, deltaX)
-    alpha = 0.8
+    deltaXTan = target_x - target_lastX
+    deltaYTan = target_y - target_lastY
+    tan = np.arctan2( deltaYTan, deltaXTan)
+    
+    alpha = 0.9
     cosa = alpha * np.cos(previousTan) + (1 - alpha) * np.cos(tan)
     sina = alpha * np.sin(previousTan) + (1 - alpha) * np.sin(tan)
     tanFiltered = np.arctan2(sina, cosa) # Calculate tangent
-    
-    droneCONST_x = target_x - np.cos(tanFiltered)*const_dist #deltaD
-    droneCONST_y = target_y - np.sin(tanFiltered)*const_dist #deltaD
-    
+ 
+    if(USE_TAN):
+        droneCONST_x = target_x - np.cos(tanFiltered)*const_dist
+        if(droneCONST_x < target_x):
+            droneCONST_x = target_x + np.cos(tanFiltered)*const_dist
+            
+        droneCONST_y = target_y - np.sin(tanFiltered)*const_dist
+    else:
+        
+        droneCONST_x = target_x - np.cos(theta)*deltaD
+        droneCONST_y = target_y - np.sin(theta)*deltaD
+        
     return droneCONST_x, droneCONST_y, tanFiltered
 
 def computeDesiredAcceleration(drone_x, drone_y, target_x, target_y, const_dist):
@@ -289,7 +308,7 @@ def computeDesiredAcceleration(drone_x, drone_y, target_x, target_y, const_dist)
     kp = 0.1
     return kp*np.array([deltaX, deltaY, 0])
 
-WEIGHTED_AVG = True
+WEIGHTED_AVG = False
 def main():
     # Load environment
     env = environment()
@@ -378,15 +397,18 @@ def main():
                 posfX, posfY, tangent = getGoalPosition(x[0], x[1],
                                                         target_xPredicted,target_yPredicted,
                                                         DIST_2_TARGET,
-                                               target_x[--1], target_y[-1], tangent)
+                                               target_x[-1], target_y[-1], tangent)
             
             if(WEIGHTED_AVG):
-                w = 0.5
-                posfX = (1-w)*splineX(t) + w*target_xPredicted # weighted average
-                posfY = (1-w)*splineY(t) + w*target_yPredicted # weighted average
-                #posfX = (1-w)*x[0] + w*target_xGoal # weighted average (drone)
-                #posfY = (1-w)*x[1] + w*target_yGoal # weighted average (drone)
+                w = 1.0
+                weightedX = (1-w)*splineX(t) + w*target_xPredicted # weighted average
+                weightedY = (1-w)*splineY(t) + w*target_yPredicted # weighted average
+                deltaX = weightedX - splineX(t)
+                deltaY = weightedY - splineY(t)
+                posfX = x[0] + 1.5*sign(deltaX) #x[0] + 1.5*sign(deltaX)
+                posfY = x[1] + 1.5*sign(deltaY) #x[1] + 1.5*sign(deltaY)
             
+        
             posf = np.array([posfX,posfY, height ]) # TARGET CURRENT LOCATION SHIFTED WITH RELATIVE DIST
             
             rapid_traj = generate_single_motion_primitive(pos0,vel0,acc0,posf,velf, t)
