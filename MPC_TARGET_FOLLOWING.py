@@ -25,9 +25,57 @@ FOV_D = 6.0
 FOV_theta = 40
 radius = 0.5
 DIST_2_TARGET = FOV_D/2
-TRG_HORIZ = 10
+DS = DIST_2_TARGET
+TRG_HORIZ = 5
 
 fig = plt.figure()
+
+def distPoint2Vector(p1, p2, p3):
+    return np.abs(np.linalg.norm(np.cross(p2-p1, p1-p3)))/np.linalg.norm(p2-p1) 
+
+def getGoalPoint(Wc, T, obstacles):
+    
+    nObs = len(obstacles)
+    if(nObs > 0):
+        lambda_ = 0.5 / nObs
+    else:
+        lambda_ = 0.5
+    
+    lambda_ = 2.0 # 2.0
+    dm = 0.02*0 #math.sin(FOV_theta)*(DS/2) # 0.02
+    theta_discr = np.linspace(-math.pi,math.pi, int(math.pi*10) )
+    costs = []
+    discrete_wp = []
+    
+    for theta in theta_discr:
+        cost = 0
+        candidate_wp = np.array( [DS*np.cos(theta) + T[0], DS*np.sin(theta) + T[1] ] )
+        discrete_wp.append(candidate_wp)
+        
+        l1 = np.hypot( candidate_wp[0] - Wc[0], candidate_wp[1] - Wc[1] )
+        cost += l1
+        
+        midx = (T[0] + candidate_wp[0] ) / 2
+        midy = (T[1] + candidate_wp[1] ) / 2
+    
+        for ob in obstacles:
+            p1 = np.array( [T[0], T[1] ] ) # point from bearing vector
+            p2 = np.array( [candidate_wp[0], candidate_wp[1] ] ) # point from bearing vector
+            p3 = np.array([ob[0], ob[1] ] ) # candidate goalpoint
+            
+            l2 = distPoint2Vector(p1, p2, p3)
+            #l2 = np.hypot(  midx - ob[0] , midy - ob[1] )
+            #dis2toObs = np.hypot(  p2[0] - ob[0] , p2[1] - ob[1] )
+            cost +=  lambda_* math.exp( -(l2+dm) )
+        
+        costs.append(cost)
+    
+    costs_arr = np.array(costs)
+    idx = np.argmin(costs_arr)
+    
+    Wg = discrete_wp[idx]
+    
+    return Wg
 
 def sign(x):
     if x < 0:
@@ -84,7 +132,9 @@ class environment:
 #                            [8.0, 10.0],
 #                            [9.0, 11.0]
 #                            ])
-        self.obstacles = np.array( [ [-2,5],[-1.5,5], [-1,5],[-0.5,5], [0,5],[0.5,5],  [1,5], [1.5,5],[2,5]] )
+        self.obstacles = np.array( [ [-2,5],[-1.5,5], [-1,5],[-0.5,5], [0,5],
+                                    [0.5,5],  [1,5], [1.5,5],[2,5], [6,5] ] ) 
+                                    # [2.5, 1.0],[3.0, 1.0], [3.5, 1.0]  ] )
         self.bounds = 15
 
 def plot_tangent(x,y,yaw):
@@ -258,7 +308,7 @@ def getRefTrajRapid(traj, t):
     # velocity reference
     x_ref[3] = -2*np.sin(t)
     x_ref[4] = 2*np.cos(t)
-    x_ref[5] = 2.0
+    x_ref[5] = 0.0
     x_ref[8] = np.arctan2(2*np.cos(t) , -2*np.sin(t))
     
     return position
@@ -272,7 +322,7 @@ def getYaw(x1, y1, x2, y2):
 def getGoalPosition(obstacle, drone_x, drone_y, target_x, target_y, const_dist, 
                     target_lastX, target_lastY, previousTan):
     
-    USE_TAN = False
+    USE_TAN = True
     deltaX = target_x - drone_x
     deltaY = target_y - drone_y
     theta = np.arctan2( deltaY, deltaX)
@@ -280,20 +330,20 @@ def getGoalPosition(obstacle, drone_x, drone_y, target_x, target_y, const_dist,
     droneCONST_x = drone_x + np.cos(theta)*(deltaD - const_dist)
     droneCONST_y = drone_y + np.sin(theta)*(deltaD - const_dist)
         
-    if(len(obstacle) > 0):
-        # Detect collision LOS with obstacles
-        discret_dist = np.linspace(0, deltaD, int(deltaD*10))
-        ob_x = obstacle[0][0]
-        ob_y = obstacle[0][1]  
-        for d in discret_dist:
-            diffX = ob_x - droneCONST_x + np.cos(theta)*d
-            diffY = ob_y - droneCONST_y + np.sin(theta)*d
-            plt.plot(ob_x, ob_y, '-ko',markersize=15)
-            # check collision
-            if( np.hypot(diffX, diffY) < 2.0):
-                print("LOS BLOCKED")
-                USE_TAN = True
-                break
+#    if(len(obstacle) > 0):
+#        # Detect collision LOS with obstacles
+#        discret_dist = np.linspace(0, deltaD, int(deltaD*10))
+#        ob_x = obstacle[0][0]
+#        ob_y = obstacle[0][1]  
+#        for d in discret_dist:
+#            diffX = ob_x - droneCONST_x + np.cos(theta)*d
+#            diffY = ob_y - droneCONST_y + np.sin(theta)*d
+#            plt.plot(ob_x, ob_y, '-ko',markersize=15)
+#            # check collision
+#            if( np.hypot(diffX, diffY) < 3.0):
+#                print("LOS BLOCKED")
+#                USE_TAN = True
+#                break
         
     # Calculate tangent
     deltaXTan = target_x - target_lastX
@@ -305,21 +355,31 @@ def getGoalPosition(obstacle, drone_x, drone_y, target_x, target_y, const_dist,
     sina = alpha * np.sin(previousTan) + (1 - alpha) * np.sin(tan)
     tanFiltered = np.arctan2(sina, cosa) # Calculate tangent
  
+    #if( abs(tanFiltered) < np.deg2rad(45) ):
+     #   USE_TAN = False
+        
     if(USE_TAN):
-        droneCONST_x = target_x - np.cos(tanFiltered)*const_dist
-        if(droneCONST_x < target_x):
-            droneCONST_x = target_x + np.cos(tanFiltered)*const_dist
+        droneTAN_x = target_x - np.cos(tanFiltered)*const_dist
+        if(droneTAN_x < target_x):
+            droneTAN_x = target_x + np.cos(tanFiltered)*const_dist
             
-        droneCONST_y = target_y - np.sin(tanFiltered)*const_dist
+        droneTAN_y = target_y - np.sin(tanFiltered)*const_dist
+    
+    droneCONST_x = droneCONST_x + (droneTAN_x - droneCONST_x)/2
+    droneCONST_y = droneCONST_y + (droneTAN_y - droneCONST_y)/2
         
     return droneCONST_x, droneCONST_y, tanFiltered
 
 def computeDesiredAcceleration(drone_x, drone_y, target_x, target_y, const_dist):
-    deltaX = target_x - drone_x - const_dist
-    deltaY = target_y - drone_y - const_dist
-    #deltaD = np.hypot(deltaX, deltaY ) - const_dist
+    
+    deltaX = target_x - drone_x # - const_dist
+    deltaY = target_y - drone_y #- const_dist
+    
+    deltaD = np.hypot(deltaX, deltaY ) - const_dist
+    theta = np.arctan2( deltaX, deltaY)
+    
     kp = 0.1
-    return kp*np.array([deltaX, deltaY, 0])
+    return kp*np.array([deltaD*np.cos(theta), deltaD*np.sin(theta), 0])
 
 WEIGHTED_AVG = False
 def main():
@@ -330,7 +390,7 @@ def main():
     yaw = np.deg2rad(180)
     
     # Load target trajectory
-    offline_path = np.load('target_waypoints.npy')
+    offline_path = np.load('target_waypoints_easy.npy') # target_waypoints.npy
     #targetTraj = getTargetTraj(offline_path)
     splineX, splineY = getSpline(offline_path)
     Tf = 7 #targetTraj.TS[-1]
@@ -338,7 +398,7 @@ def main():
     target_y = []
    
     # Define MPC
-    x0_val = np.array([0, -3, height, -1, 1, 2, 0, 0, 0, 0, 0, 0])
+    x0_val = np.array([0.6, -1.5, height, -0.1, 0.5, 2, 0, 0, 0, 0, 0, 0])
     t0_val = 0.0
     target_x.append( splineX(t0_val) )
     target_y.append( splineY(t0_val) )
@@ -365,6 +425,9 @@ def main():
     u = np.zeros(mpc.n_u)
     refTrajx = []
     refTrajy = []
+    
+    goalPointsX = []
+    goalPointsY = []
     rapid_posX = []
     rapid_posY = []
 
@@ -383,8 +446,8 @@ def main():
             'key_release_event',
             lambda event: [exit(0) if event.key == 'escape' else None])
         plt.gca().set_aspect('equal', adjustable='box')
-        plt.xlim( (-4,5))
-        plt.ylim( (-6,8))
+        plt.xlim( (-10,10))
+        plt.ylim( (-10,10))
         
         if not pause:
             observed_obstacles = updateObstacleMap(x[0],x[1], all_obstacles)
@@ -413,24 +476,36 @@ def main():
                                                         target_xPredicted,target_yPredicted,
                                                         DIST_2_TARGET, x[0], x[1], 1.42)
             else:
-                nearest_obstacle_target, ind = getNearestObstacle(target_xPredicted,
-                                                              target_yPredicted,
-                                                              observed_obstacles)
-                posfX, posfY, tangent = getGoalPosition(nearest_obstacle_target, x[0], x[1],
-                                                        target_xPredicted,target_yPredicted,
-                                                        DIST_2_TARGET,
-                                               target_x[-1], target_y[-1], tangent)
+#                nearest_obstacle_target, ind = getNearestObstacle(target_xPredicted,
+#                                                              target_yPredicted,
+#                                                              observed_obstacles)
+#                posfX, posfY, tangent = getGoalPosition(nearest_obstacle_target, x[0], x[1],
+#                                                        target_xPredicted,target_yPredicted,
+#                                                        DIST_2_TARGET,
+#                                               target_x[-1], target_y[-1], tangent)
+                
+                #T = np.array( [target_x[-1],target_y[-1]] )
+                T = np.array( [target_xPredicted, target_yPredicted] )
+                Wc = np.array( [x[0], x[1]] )
+                nearest_obstacle_target, ind = getNearestObstacle(x[0], x[1],observed_obstacles)
+                
+                Wg = getGoalPoint(Wc, T, observed_obstacles)
+                posfX = posfX + 0.9* ( Wg[0] - posfX)
+                posfY = posfY + 0.9* ( Wg[1] - posfY)
+                
+                goalPointsX.append(Wg[0])
+                goalPointsY.append(Wg[1])
             
             if(WEIGHTED_AVG):
-                w = 1.0
+                w = 0.1
                 weightedX = (1-w)*splineX(t) + w*target_xPredicted # weighted average
                 weightedY = (1-w)*splineY(t) + w*target_yPredicted # weighted average
                 deltaX = weightedX - splineX(t)
                 deltaY = weightedY - splineY(t)
-                posfX = x[0] + 1.5*sign(deltaX) #x[0] + 1.5*sign(deltaX)
-                posfY = x[1] + 1.5*sign(deltaY) #x[1] + 1.5*sign(deltaY)
+                posfX = weightedX #x[0] + 1.5*sign(deltaX) #x[0] + 1.5*sign(deltaX)
+                posfY = weightedY #x[1] + 1.5*sign(deltaY) #x[1] + 1.5*sign(deltaY)
             
-        
+            
             posf = np.array([posfX,posfY, height ]) # TARGET CURRENT LOCATION SHIFTED WITH RELATIVE DIST
             
             rapid_traj = generate_single_motion_primitive(pos0,vel0,acc0,posf,velf, t)
@@ -462,18 +537,19 @@ def main():
             
             t += sampling_time
             idx = idx + 1
+            
+            
         ######## Simulation ########
-            
-            
-            
             xs_plot = np.array(xs_sim)
             # PLOT TRAJECTORIES
-            plt.plot(refTrajx, refTrajy, 'g') # REFERENCE TRAJ (MOTION PRIMITIVE)
+            
             plt.plot(xs_plot[:,0], xs_plot[:,1], 'b--') # DRONE TRAJECTORY
             plt.plot(target_x,target_y, 'r') # TARGET'S TRAJECTORY
             plt.plot(target_x[-1],target_y[-1], '-ro',markersize=10) # TARGET LAST
-            plt.plot(posfX, posfY, '-go',markersize=15) # GOAL LAST (Motion primitive)
-            plt.legend(['reference','quadrotor', 'target', 'target_LOC', 'goal_LOC'])
+            #plt.plot(goalPointsX, goalPointsY, 'g--')
+            #plt.plot(posfX, posfY, '-go',markersize=15) # GOAL LAST (Motion primitive)
+            plt.plot(refTrajx, refTrajy, 'g') # REFERENCE TRAJ (MOTION PRIMITIVE)
+            plt.legend(['quadrotor', 'target', 'target_LOC', 'goalpoint'])
             
             # PLOT ENVIRONMENT
             plot_quadrotor(x[0], x[1], x[8])

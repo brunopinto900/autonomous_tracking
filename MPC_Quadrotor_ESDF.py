@@ -17,7 +17,7 @@ class HexaCopter:
         else:
             raise TypeError
 
-        self.m = 1.44
+        self.m = 1.44/2
         self.l = 0.23
         self.k = 1.6e-09
         self.Ixx = 0.0348
@@ -27,7 +27,7 @@ class HexaCopter:
         self.gc = 9.80665
 
         self.lbu = 0.144
-        self.ubu = 6
+        self.ubu = 12
         
     def dynamics(self, x, u):
         sin = self.sin
@@ -79,7 +79,7 @@ class CostFunction:
             raise TypeError
         pi = self.pi
 
-        m = 1.44
+        m = 1.44/2
         g_c = 9.80665
 
         self.n_x = 12
@@ -148,7 +148,7 @@ class MPC:
         
         # horizon length[s], total grids
         T = 1.0
-        N = 20
+        N = 10
         dt = T / N
 
         # time at each stage
